@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Pixora",
+    "name": "Pixora AI",
     "slug": "Pixora",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -34,6 +34,20 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you edit them with AI."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to access your photos.",
+          "savePhotosPermission": "Allow $(PRODUCT_NAME) to save photos.",
+          "isAccessMediaLocationEnabled": true
         }
       ]
     ],

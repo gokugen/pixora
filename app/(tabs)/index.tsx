@@ -7,12 +7,19 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { useImageGeneration } from '@/hooks/useImageGeneration';
+import { ImageGenerationRequest } from '@/lib/supabase';
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
+import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface SelectedImage {
   uri: string;
@@ -20,9 +27,12 @@ interface SelectedImage {
 }
 
 export default function ImageEditorScreen() {
+  const insets = useSafeAreaInsets();
+
   const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
   const [prompt, setPrompt] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [selectedImageForViewer, setSelectedImageForViewer] = useState<SelectedImage | null>(null);
+  const { isGenerating, generatedImageUrl, error, generateImage, resetGeneration } = useImageGeneration();
 
   const requestPermissions = async () => {
     if (Platform.OS !== 'web') {
@@ -44,9 +54,9 @@ export default function ImageEditorScreen() {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsMultipleSelection: true,
-        quality: 0.8,
+        quality: 1
       });
 
       if (!result.canceled && result.assets) {
@@ -65,157 +75,313 @@ export default function ImageEditorScreen() {
     setSelectedImages(prev => prev.filter(img => img.id !== id));
   };
 
-  const generateImage = async () => {
+  const openImageViewer = (image: SelectedImage) => {
+    setSelectedImageForViewer(image);
+  };
+
+  const closeImageViewer = () => {
+    setSelectedImageForViewer(null);
+  };
+
+  const downloadImage = async (imageUri: string) => {
+    try {
+      // Demander la permission d'accéder à la galerie
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission requise',
+          'Nous avons besoin de votre permission pour sauvegarder l\'image dans votre galerie.'
+        );
+        return;
+      }
+      console.log('imageUri', imageUri);
+      // Télécharger l'image d'abord pour obtenir un URI local
+      const localUri = FileSystem.documentDirectory + 'temp_image_' + Date.now() + '.jpg';
+      const downloadResult = await FileSystem.downloadAsync(imageUri, localUri);
+
+      if (downloadResult.status !== 200) {
+        throw new Error('Échec du téléchargement de l\'image');
+      }
+
+      // Sauvegarder l'image dans la galerie avec l'URI local
+      const asset = await MediaLibrary.createAssetAsync(downloadResult.uri);
+
+      if (asset) {
+        // Essayer de créer un album personnalisé pour les images générées
+        try {
+          await MediaLibrary.createAlbumAsync('Pixora AI', asset, false);
+          Alert.alert(
+            'Téléchargement réussi !',
+            'L\'image a été sauvegardée dans votre galerie dans l\'album "Pixora AI".'
+          );
+        } catch (albumError) {
+          // Si la création d'album échoue, l'image est quand même sauvegardée
+          Alert.alert(
+            'Téléchargement réussi !',
+            'L\'image a été sauvegardée dans votre galerie.'
+          );
+        }
+      } else {
+        throw new Error('Impossible de créer l\'asset');
+      }
+
+      // Nettoyer le fichier temporaire
+      try {
+        await FileSystem.deleteAsync(localUri);
+      } catch (cleanupError) {
+        console.log('Impossible de nettoyer le fichier temporaire:', cleanupError);
+      }
+
+    } catch (error) {
+      // console.error('Erreur lors du téléchargement:', error);
+      Alert.alert(
+        'Erreur de téléchargement',
+        'Impossible de sauvegarder l\'image. Vérifiez que vous avez accordé les permissions nécessaires.'
+      );
+    }
+  };
+
+  const handleGenerateImage = async () => {
     if (!prompt.trim()) {
-      Alert.alert('Erreur', 'Veuillez saisir un prompt pour générer l\'image');
+      Alert.alert('Erreur', 'Veuillez saisir un prompt pour générer l&apos;image');
       return;
     }
 
-    setIsGenerating(true);
+    const request: ImageGenerationRequest = {
+      prompt: prompt.trim(),
+      images: selectedImages.map(img => img.uri)
+    };
 
-    // Simulation de génération d'image
-    setTimeout(() => {
-      setIsGenerating(false);
-      Alert.alert(
-        'Génération terminée',
-        `Image générée avec le prompt: "${prompt}"\n\nCette fonctionnalité sera intégrée avec votre API d'IA.`
-      );
-    }, 2000);
+    await generateImage(request);
+  };
+
+  const handleReset = () => {
+    setSelectedImages([]);
+    setPrompt('');
+    resetGeneration();
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <ThemedView style={styles.header}>
-        <ThemedText type="title" style={styles.title}>
-          Éditeur d'Images IA
-        </ThemedText>
-        <ThemedText style={styles.subtitle}>
-          Créez et éditez des images avec l'intelligence artificielle
-        </ThemedText>
-      </ThemedView>
-
-      {/* Section Import des Photos */}
-      <ThemedView style={styles.section}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>
-          Importer les Photos
-        </ThemedText>
-        <ThemedText style={styles.sectionDescription}>
-          Sélectionnez une ou plusieurs images de départ (optionnel)
-        </ThemedText>
-
-        <TouchableOpacity style={styles.importButton} onPress={pickImages}>
-          <Ionicons name="images-outline" size={24} color="#FEB50A" />
-          <ThemedText style={styles.importButtonText}>
-            Choisir des Images
-          </ThemedText>
-        </TouchableOpacity>
-
-        {/* Affichage des images sélectionnées */}
-        {selectedImages.length > 0 && (
-          <View style={styles.imagesContainer}>
-            <ThemedText style={styles.imagesCount}>
-              {selectedImages.length} image(s) sélectionnée(s)
-            </ThemedText>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {selectedImages.map((image) => (
-                <View key={image.id} style={styles.imageWrapper}>
-                  <Image source={{ uri: image.uri }} style={styles.selectedImage} />
-                  <TouchableOpacity
-                    style={styles.removeButton}
-                    onPress={() => removeImage(image.id)}
-                  >
-                    <Ionicons name="close-circle" size={24} color="#FF4444" />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </ScrollView>
-          </View>
-        )}
-      </ThemedView>
-
-      {/* Section Prompt */}
-      <ThemedView style={styles.section}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>
-          Prompt de Génération
-        </ThemedText>
-        <ThemedText style={styles.sectionDescription}>
-          Décrivez l'image que vous souhaitez créer ou modifier
-        </ThemedText>
-
-        <ThemedView style={styles.promptContainer}>
-          <ThemedText style={styles.promptLabel}>Description :</ThemedText>
-          <ThemedView style={styles.textInputContainer}>
-            <ThemedText
-              style={styles.textInput}
-              multiline
-              numberOfLines={4}
-              placeholder="Ex: Une forêt enchantée avec des lucioles, style peinture à l'huile..."
-              placeholderTextColor="#999"
-              value={prompt}
-              onChangeText={setPrompt}
-            />
-          </ThemedView>
-        </ThemedView>
-      </ThemedView>
-
-      {/* Bouton Générer */}
-      <ThemedView style={styles.section}>
-        <TouchableOpacity
-          style={[
-            styles.generateButton,
-            (!prompt.trim() || isGenerating) && styles.generateButtonDisabled
-          ]}
-          onPress={generateImage}
-          disabled={!prompt.trim() || isGenerating}
+    <View style={styles.container}>
+      <KeyboardAwareScrollView>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingTop: insets.top }}
+          keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
-          {isGenerating ? (
-            <>
-              <Ionicons name="sync" size={24} color="#FFF" style={styles.spinning} />
-              <ThemedText style={styles.generateButtonText}>
-                Génération en cours...
-              </ThemedText>
-            </>
-          ) : (
-            <>
-              <Ionicons name="sparkles" size={24} color="#FFF" />
-              <ThemedText style={styles.generateButtonText}>
-                Générer l'Image
-              </ThemedText>
-            </>
-          )}
-        </TouchableOpacity>
-      </ThemedView>
+          <ThemedView style={styles.header}>
+            <ThemedText type="title" style={styles.title}>
+              Éditeur d&apos;Images IA
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Créez et éditez des images avec l&apos;intelligence artificielle
+            </ThemedText>
+          </ThemedView>
 
-      {/* Espace en bas pour éviter que le bouton soit caché */}
-      <View style={styles.bottomSpacer} />
-    </ScrollView>
+          {/* Section Import des Photos */}
+          <ThemedView style={styles.section}>
+            <ThemedText type="subtitle" style={styles.sectionTitle}>
+              Importer les Photos
+            </ThemedText>
+            <ThemedText style={styles.sectionDescription}>
+              Sélectionnez une ou plusieurs images de départ (optionnel)
+            </ThemedText>
+
+            <TouchableOpacity style={styles.importButton} onPress={pickImages}>
+              <Ionicons name="images-outline" size={24} color="#FEB50A" />
+              <ThemedText style={styles.importButtonText}>
+                Choisir des Images
+              </ThemedText>
+            </TouchableOpacity>
+
+            {/* Affichage des images sélectionnées */}
+            {selectedImages.length > 0 && (
+              <View style={styles.imagesContainer}>
+                <ThemedText style={styles.imagesCount}>
+                  {selectedImages.length} image(s) sélectionnée(s)
+                </ThemedText>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ overflow: 'visible' }}
+                >
+                  {selectedImages.map((image) => (
+                    <View key={image.id} style={styles.imageWrapper}>
+                      <TouchableOpacity
+                        style={styles.imageTouchable}
+                        onPress={() => openImageViewer(image)}
+                      >
+                        <Image source={{ uri: image.uri }} style={styles.selectedImage} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.removeButton}
+                        onPress={() => removeImage(image.id)}
+                      >
+                        <Ionicons name="close-circle" size={24} color="#FF4444" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </ThemedView>
+
+          {/* Section Prompt */}
+          <ThemedView style={styles.section}>
+            <ThemedText type="subtitle" style={styles.sectionTitle}>
+              Prompt de Génération
+            </ThemedText>
+            <ThemedText style={styles.sectionDescription}>
+              Décrivez l&apos;image que vous souhaitez créer ou modifier
+            </ThemedText>
+
+            <ThemedView style={styles.promptContainer}>
+              <ThemedText style={styles.promptLabel}>Description :</ThemedText>
+              <ThemedView style={styles.textInputContainer}>
+                <TextInput
+                  style={styles.textInput}
+                  multiline
+                  numberOfLines={4}
+                  placeholder="Ex: Une forêt enchantée avec des lucioles, style peinture à l&apos;huile..."
+                  placeholderTextColor="#999"
+                  value={prompt}
+                  onChangeText={setPrompt}
+                  returnKeyType="done"
+                  blurOnSubmit={true}
+                />
+              </ThemedView>
+            </ThemedView>
+          </ThemedView>
+
+          {/* Bouton Générer */}
+          <ThemedView style={styles.section}>
+            <TouchableOpacity
+              style={[
+                styles.generateButton,
+                (!prompt.trim() || isGenerating) && styles.generateButtonDisabled
+              ]}
+              onPress={handleGenerateImage}
+              disabled={!prompt.trim() || isGenerating}
+            >
+              {isGenerating ? (
+                <>
+                  <Ionicons name="sync" size={24} color="#000" style={styles.spinning} />
+                  <ThemedText style={styles.generateButtonText}>
+                    Génération en cours...
+                  </ThemedText>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="sparkles" size={24} color="#000" />
+                  <ThemedText style={styles.generateButtonText}>
+                    Générer l&apos;Image
+                  </ThemedText>
+                </>
+              )}
+            </TouchableOpacity>
+          </ThemedView>
+
+          {/* Affichage de l'image générée */}
+          {generatedImageUrl && (
+            <ThemedView style={styles.section}>
+              <ThemedText type="subtitle" style={styles.sectionTitle}>
+                Image Générée
+              </ThemedText>
+              <TouchableOpacity
+                style={styles.generatedImageTouchable}
+                onPress={() => setSelectedImageForViewer({ uri: generatedImageUrl, id: 'generated' })}
+              >
+                <Image source={{ uri: generatedImageUrl }} style={styles.generatedImage} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.resetButton} onPress={handleReset}>
+                <ThemedText style={styles.resetButtonText}>Nouvelle Génération</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          )}
+
+          {/* Affichage des erreurs */}
+          {error && (
+            <ThemedView style={styles.section}>
+              <ThemedText style={styles.errorText}>Erreur: {error}</ThemedText>
+            </ThemedView>
+          )}
+        </ScrollView>
+      </KeyboardAwareScrollView>
+
+      {/* Modal du viewer d'image */}
+      {selectedImageForViewer && (
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity
+            style={styles.imageViewerBackground}
+            onPress={closeImageViewer}
+            activeOpacity={1}
+          >
+            <View style={styles.imageViewerContainer}>
+              <View style={styles.imageViewerButtonsContainer}>
+                <TouchableOpacity
+                  style={styles.imageViewerButton}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    downloadImage(selectedImageForViewer.uri);
+                  }}
+                >
+                  <Ionicons name="download" size={30} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.imageViewerButton}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    closeImageViewer();
+                  }}
+                >
+                  <Ionicons name="close" size={30} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
+              <Image
+                source={{ uri: selectedImageForViewer.uri }}
+                style={styles.imageViewerImage}
+                contentFit="contain"
+              />
+            </View>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#151718',
   },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  safeArea: {
+    flex: 1,
+  },
+
   header: {
     padding: 20,
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
     marginBottom: 16,
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#2C3E50',
+    color: '#ECEDEE',
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
-    color: '#7F8C8D',
+    color: '#9BA1A6',
     textAlign: 'center',
   },
   section: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#1E1E1E',
     marginHorizontal: 16,
     marginBottom: 16,
     padding: 20,
@@ -225,26 +391,26 @@ const styles = StyleSheet.create({
       width: 0,
       height: 2,
     },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.3,
     shadowRadius: 3.84,
     elevation: 5,
   },
   sectionTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#2C3E50',
+    color: '#ECEDEE',
     marginBottom: 8,
   },
   sectionDescription: {
     fontSize: 14,
-    color: '#7F8C8D',
+    color: '#9BA1A6',
     marginBottom: 16,
   },
   importButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FEF7E0',
+    backgroundColor: '#2A2A2A',
     borderWidth: 2,
     borderColor: '#FEB50A',
     borderStyle: 'dashed',
@@ -259,15 +425,20 @@ const styles = StyleSheet.create({
   },
   imagesContainer: {
     marginTop: 16,
+    overflow: 'hidden'
   },
   imagesCount: {
     fontSize: 14,
-    color: '#7F8C8D',
+    color: '#9BA1A6',
     marginBottom: 12,
   },
   imageWrapper: {
     position: 'relative',
-    marginRight: 12,
+    marginRight: 12
+  },
+  imageTouchable: {
+    borderRadius: 8,
+    overflow: 'hidden'
   },
   selectedImage: {
     width: 80,
@@ -278,28 +449,30 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -8,
     right: -8,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 12
   },
   promptContainer: {
     gap: 8,
+    backgroundColor: '#1E1E1E',
+    // padding: 12,
   },
   promptLabel: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2C3E50',
+    color: '#ECEDEE',
   },
   textInputContainer: {
     borderWidth: 1,
-    borderColor: '#E1E8ED',
+    borderColor: '#333333',
     borderRadius: 8,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#2A2A2A',
     minHeight: 100,
   },
   textInput: {
     padding: 12,
     fontSize: 16,
-    color: '#2C3E50',
+    color: '#ECEDEE',
     textAlignVertical: 'top',
   },
   generateButton: {
@@ -320,19 +493,86 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   generateButtonDisabled: {
-    backgroundColor: '#E1E8ED',
+    backgroundColor: '#444444',
     shadowOpacity: 0,
     elevation: 0,
   },
   generateButtonText: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: '#000000',
   },
   spinning: {
     transform: [{ rotate: '0deg' }],
   },
-  bottomSpacer: {
-    height: 40,
+  generatedImage: {
+    width: '100%',
+    height: 300,
+    borderRadius: 12,
+    marginTop: 16,
+    marginBottom: 16,
+  },
+  generatedImageTouchable: {
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  resetButton: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FEB50A',
+  },
+  errorText: {
+    color: '#FF4444',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 16,
+  },
+  // Styles pour le viewer d'image
+  imageViewerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+  },
+  imageViewerBackground: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageViewerContainer: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  imageViewerButtonsContainer: {
+    position: 'absolute',
+    top: 70,
+    right: 0,
+    zIndex: 1001,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  imageViewerButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+    padding: 8,
+    marginRight: 10,
+  },
+  imageViewerImage: {
+    width: '100%',
+    height: '100%',
   },
 });
