@@ -95,17 +95,26 @@ export default function ImageEditorScreen() {
         );
         return;
       }
-      console.log('imageUri', imageUri);
-      // Télécharger l'image d'abord pour obtenir un URI local
-      const localUri = FileSystem.documentDirectory + 'temp_image_' + Date.now() + '.jpg';
-      const downloadResult = await FileSystem.downloadAsync(imageUri, localUri);
 
-      if (downloadResult.status !== 200) {
-        throw new Error('Échec du téléchargement de l\'image');
+      // Vérifier si c'est du base64
+      if (!imageUri.startsWith('data:')) {
+        throw new Error('Format d\'image non supporté. Seul le base64 est supporté.');
       }
 
+      // Extraire le base64 de l'URI
+      const base64 = imageUri.split(',')[1];
+      if (!base64) {
+        throw new Error('Format base64 invalide');
+      }
+
+      // Créer un fichier temporaire avec le base64
+      const localUri = FileSystem.documentDirectory + 'temp_image_' + Date.now() + '.jpg';
+      await FileSystem.writeAsStringAsync(localUri, base64, {
+        encoding: FileSystem.EncodingType.Base64
+      });
+
       // Sauvegarder l'image dans la galerie avec l'URI local
-      const asset = await MediaLibrary.createAssetAsync(downloadResult.uri);
+      const asset = await MediaLibrary.createAssetAsync(localUri);
 
       if (asset) {
         // Essayer de créer un album personnalisé pour les images générées
@@ -134,7 +143,7 @@ export default function ImageEditorScreen() {
       }
 
     } catch (error) {
-      // console.error('Erreur lors du téléchargement:', error);
+      console.error('Erreur lors du téléchargement:', error);
       Alert.alert(
         'Erreur de téléchargement',
         'Impossible de sauvegarder l\'image. Vérifiez que vous avez accordé les permissions nécessaires.'
